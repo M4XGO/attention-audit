@@ -1,6 +1,6 @@
 data/*.csv
+data/.card_*
+data/.waitlist_asked
 card.png
-__pycache__/
-*.pyc
+audit.log
 .DS_Store
-data/.week_notified

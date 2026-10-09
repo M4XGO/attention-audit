@@ -5,11 +5,11 @@ set -euo pipefail
 #              daily CSV in ./data. Stretches with no keyboard/mouse input are
 #              logged as "idle" so lunch and sleep don't count as focus.
 #              Only the app name is recorded: no window titles, no URLs, no
-#              keystrokes, no screenshots. Nothing leaves your Mac.
+#              keystrokes, no screenshots. Nothing leaves your Mac, and no
+#              macOS permission is needed.
 # Usage: ./audit.sh [interval_seconds]   (default 30, ctrl-c to stop)
-# Dependencies: osascript, ioreg (both macOS built-ins)
-# Note: first run asks for Accessibility permission for your terminal app,
-#       because reading the frontmost app name goes through System Events.
+#        install.sh runs it in the background at login instead.
+# Dependencies: lsappinfo, ioreg, osascript (all macOS built-ins)
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly DATA_DIR="${SCRIPT_DIR}/data"
@@ -22,7 +22,6 @@ if [[ ! "$INTERVAL" =~ ^[0-9]+$ ]] || [[ "$INTERVAL" -lt 5 ]]; then
     exit 1
 fi
 
-# Seconds since the last keyboard or mouse event.
 # awk reads all of ioreg instead of exiting early: an early exit sends SIGPIPE
 # to ioreg, which pipefail turns into a failure.
 idle_seconds() {
@@ -32,39 +31,45 @@ idle_seconds() {
     echo "${idle:-0}"
 }
 
+# lsappinfo reads the frontmost app from LaunchServices, which needs no
+# Accessibility or Automation permission, unlike System Events.
 frontmost_app() {
-    osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true' 2>/dev/null || echo "unknown"
+    local name
+    name=$(lsappinfo info -only name "$(lsappinfo front)" 2>/dev/null \
+        | sed -E 's/.*"="(.*)"$/\1/') || true
+    echo "${name:-unknown}"
 }
 
 log_file_for_today() {
     echo "${DATA_DIR}/audit_$(date +%Y-%m-%d).csv"
 }
 
-# One notification, the first time 7 distinct days are logged.
-notify_when_week_done() {
-    local marker="${DATA_DIR}/.week_notified"
-    [[ -f "$marker" ]] && return 0
+# Once 7 days are logged, offer the card. "Later" asks again the next day.
+offer_card_when_week_done() {
+    local done_marker="${DATA_DIR}/.card_shown"
+    local asked_marker="${DATA_DIR}/.card_asked_$(date +%Y-%m-%d)"
+    [[ -f "$done_marker" || -f "$asked_marker" ]] && return 0
     local days
     days=$(find "$DATA_DIR" -name 'audit_*.csv' | wc -l | tr -d ' ')
-    if [[ "$days" -ge "$READY_AFTER_DAYS" ]]; then
-        osascript -e "display notification \"Run: python3 report.py --card\" with title \"Your 7-day attention card is ready\"" 2>/dev/null || true
-        echo "7 days logged. your card is ready: python3 report.py --card"
-        touch "$marker"
-    fi
+    [[ "$days" -lt "$READY_AFTER_DAYS" ]] && return 0
+
+    rm -f "${DATA_DIR}"/.card_asked_*
+    touch "$asked_marker"
+    echo "${READY_AFTER_DAYS} days logged. your card is ready: ./card.sh"
+    ( "${SCRIPT_DIR}/card.sh" --ask >/dev/null 2>&1 && touch "$done_marker" ) &
 }
 
 mkdir -p "$DATA_DIR"
 echo "logging the frontmost app every ${INTERVAL}s to data/audit_YYYY-MM-DD.csv"
 echo "idle after ${IDLE_THRESHOLD}s without input. ctrl-c to stop."
-echo "run it for 7 days, then: python3 report.py --card"
-notify_when_week_done
+echo "after ${READY_AFTER_DAYS} days you get a prompt for your card (or run ./card.sh any time)"
 
 while true; do
     log_file="$(log_file_for_today)"
     if [[ ! -f "$log_file" ]]; then
         echo "timestamp,app" > "$log_file"
-        notify_when_week_done
     fi
+    offer_card_when_week_done
 
     if [[ "$(idle_seconds)" -ge "$IDLE_THRESHOLD" ]]; then
         app="idle"

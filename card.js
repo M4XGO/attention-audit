@@ -1,8 +1,160 @@
-// Draws the shareable attention card with macOS AppKit, no dependencies.
-// Called by report.py: osascript -l JavaScript card.js <stats.json> <out.png>
-// AppKit's origin is bottom-left, so every y below goes through top().
+// Turns the audit CSVs into your attention numbers and a shareable card,
+// using only what ships with macOS (JavaScript for Automation + AppKit).
+// Usage: osascript -l JavaScript card.js <data_dir> <out.png>
+// Prints the text report. The card never shows app names.
 
 ObjC.import('AppKit');
+
+const IDLE = 'idle';
+const FOCUSED_SECONDS = 600;
+const SHORT_SECONDS = 120;
+
+// ---------- stats ----------
+
+function readSamples(dataDir) {
+  const fm = $.NSFileManager.defaultManager;
+  const names = ObjC.deepUnwrap(fm.contentsOfDirectoryAtPathError(dataDir, null)) || [];
+  const samples = [];
+  names.filter(n => /^audit_\d{4}-\d{2}-\d{2}\.csv$/.test(n)).forEach(name => {
+    const raw = $.NSString.stringWithContentsOfFileEncodingError(dataDir + '/' + name, $.NSUTF8StringEncoding, null);
+    ObjC.unwrap(raw).split('\n').slice(1).forEach(line => {
+      const comma = line.indexOf(',');
+      if (comma < 0) return;
+      const iso = line.slice(0, comma);
+      const ts = new Date(iso);
+      if (isNaN(ts)) return;
+      samples.push({ ts, day: iso.slice(0, 10), app: line.slice(comma + 1).replace(/^"|"$/g, '') });
+    });
+  });
+  return samples.sort((a, b) => a.ts - b.ts);
+}
+
+function intervalSeconds(samples) {
+  const gaps = [];
+  for (let i = 1; i < samples.length; i++) {
+    const g = (samples[i].ts - samples[i - 1].ts) / 1000;
+    if (g < 300) gaps.push(g);
+  }
+  return gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 30;
+}
+
+// A gap means the logger was not sampling (mac asleep, agent stopped), so
+// samples either side of one are not a single uninterrupted stretch.
+function activeBlocks(samples, step) {
+  const maxGap = step * 2.5;
+  const blocks = [];
+  let current = [];
+  let prev = null;
+  samples.forEach(s => {
+    const gap = prev && (s.ts - prev.ts) / 1000 > maxGap;
+    if (s.app === IDLE || gap) {
+      if (current.length) blocks.push(current);
+      current = [];
+    }
+    if (s.app !== IDLE) current.push(s);
+    prev = s;
+  });
+  if (current.length) blocks.push(current);
+  return blocks;
+}
+
+function runsIn(block, step) {
+  const out = [];
+  let app = block[0].app;
+  let count = 1;
+  block.slice(1).forEach(s => {
+    if (s.app === app) {
+      count++;
+    } else {
+      out.push({ app, seconds: count * step });
+      app = s.app;
+      count = 1;
+    }
+  });
+  out.push({ app, seconds: count * step });
+  return out;
+}
+
+function fmt(seconds) {
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h ? `${h}h${String(m).padStart(2, '0')}` : `${m}m${String(s).padStart(2, '0')}s`;
+}
+
+function compute(samples) {
+  const step = intervalSeconds(samples);
+  const blocks = activeBlocks(samples, step);
+  if (!blocks.length) return null;
+
+  const runs = [];
+  let switches = 0;
+  const byHour = new Array(24).fill(0);
+  const perApp = {};
+  const pulls = {};
+  blocks.forEach(block => {
+    const blockRuns = runsIn(block, step);
+    blockRuns.forEach((r, i) => {
+      runs.push(r);
+      perApp[r.app] = (perApp[r.app] || 0) + r.seconds;
+      if (i > 0) {
+        switches++;
+        pulls[r.app] = (pulls[r.app] || 0) + 1;
+      }
+    });
+    for (let i = 1; i < block.length; i++) {
+      if (block[i].app !== block[i - 1].app) byHour[block[i].ts.getHours()]++;
+    }
+  });
+
+  const durations = runs.map(r => r.seconds).sort((a, b) => a - b);
+  const active = durations.reduce((a, b) => a + b, 0);
+  const days = new Set(samples.map(s => s.day)).size;
+  const top = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n);
+  return {
+    days,
+    active,
+    switches,
+    switchesPerDay: switches / days,
+    switchesPerHour: active ? switches / (active / 3600) : 0,
+    medianRun: durations[Math.floor(durations.length / 2)],
+    shortPct: durations.filter(d => d < SHORT_SECONDS).length / runs.length * 100,
+    focusedPct: durations.filter(d => d >= FOCUSED_SECONDS).length / runs.length * 100,
+    longestRun: durations[durations.length - 1],
+    byHour,
+    perApp: top(perApp, 10),
+    pulls: top(pulls, 8),
+  };
+}
+
+function textReport(s) {
+  const lines = [
+    'ATTENTION AUDIT',
+    `days logged         ${s.days}`,
+    `active time         ${fmt(s.active)}`,
+    '',
+    `app switches        ${s.switches}`,
+    `  per day           ${Math.round(s.switchesPerDay)}`,
+    `  per active hour   ${s.switchesPerHour.toFixed(1)}`,
+    '',
+    `median focus run    ${fmt(s.medianRun)}`,
+    `  under 2 min       ${Math.round(s.shortPct)}% of runs`,
+    `  over 10 min       ${Math.round(s.focusedPct)}% of runs`,
+    `  longest run       ${fmt(s.longestRun)}`,
+    '',
+    '--- time per app ---',
+    ...s.perApp.map(([app, sec]) => `  ${fmt(sec).padStart(7)}  ${(sec / s.active * 100).toFixed(1).padStart(5)}%  ${app}`),
+    '',
+    '--- what pulls you away ---',
+    ...s.pulls.map(([app, n]) => `  ${String(n).padStart(4)}x  ${app}`),
+  ];
+  if (s.active < 3600) lines.splice(1, 0, `!! only ${fmt(s.active)} of activity so far. let it run longer.`);
+  return lines.join('\n');
+}
+
+// ---------- card ----------
+// AppKit's origin is bottom-left, so every y below goes through top().
 
 const W = 1200;
 const H = 675;
@@ -23,14 +175,15 @@ function top(y, height) {
   return H - y - height;
 }
 
-function font(size, weight) {
-  return $.NSFont.systemFontOfSizeWeight(size, weight);
+function attrsFor(size, weight, rgb) {
+  const attrs = $.NSMutableDictionary.alloc.init;
+  attrs.setObjectForKey($.NSFont.systemFontOfSizeWeight(size, weight), $.NSFontAttributeName);
+  attrs.setObjectForKey(color(rgb), $.NSForegroundColorAttributeName);
+  return attrs;
 }
 
 function text(str, x, y, size, rgb, weight) {
-  const attrs = $.NSMutableDictionary.alloc.init;
-  attrs.setObjectForKey(font(size, weight), $.NSFontAttributeName);
-  attrs.setObjectForKey(color(rgb), $.NSForegroundColorAttributeName);
+  const attrs = attrsFor(size, weight, rgb);
   const s = $(str);
   const sz = s.sizeWithAttributes(attrs);
   s.drawAtPointWithAttributes($.NSMakePoint(x, top(y, sz.height)), attrs);
@@ -63,10 +216,7 @@ function hourChart(byHour, x, y, w, h) {
   });
 }
 
-function run(argv) {
-  const raw = $.NSString.stringWithContentsOfFileEncodingError(argv[0], $.NSUTF8StringEncoding, null);
-  const s = JSON.parse(ObjC.unwrap(raw));
-
+function drawCard(s, outPath) {
   const rep = $.NSBitmapImageRep.alloc
     .initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(
       null, W, H, 8, 4, true, false, $.NSDeviceRGBColorSpace, 0, 0);
@@ -75,30 +225,45 @@ function run(argv) {
 
   rect(0, 0, W, H, BG, 0);
 
-  text('attention audit · ' + s.days + ' days on my mac', PAD, PAD - 8, 22, MUTED, $.NSFontWeightMedium);
+  const dayLabel = s.days === 1 ? '1 day' : s.days + ' days';
+  text('attention audit · ' + dayLabel + ' on my mac', PAD, PAD - 8, 22, MUTED, $.NSFontWeightMedium);
 
-  const numW = text(String(s.switches_per_day), PAD, PAD + 28, 132, INK, $.NSFontWeightBold);
+  const numW = text(String(Math.round(s.switchesPerDay)), PAD, PAD + 28, 132, INK, $.NSFontWeightBold);
   text('app switches', PAD + numW + 24, PAD + 70, 34, INK, $.NSFontWeightMedium);
   text('a day', PAD + numW + 24, PAD + 112, 34, MUTED, $.NSFontWeightMedium);
 
   const rowY = 300;
   const col = (W - PAD * 2) / 4;
-  stat(PAD, rowY, s.median_run, 'median focus stretch', INK);
-  stat(PAD + col, rowY, s.short_pct + '%', 'of stretches under 2 min', NUDGE);
-  stat(PAD + col * 2, rowY, s.focused_pct + '%', 'of stretches over 10 min', ACCENT);
-  stat(PAD + col * 3, rowY, String(s.switches_per_hour), 'switches per active hour', INK);
+  stat(PAD, rowY, fmt(s.medianRun), 'median focus stretch', INK);
+  stat(PAD + col, rowY, Math.round(s.shortPct) + '%', 'of stretches under 2 min', NUDGE);
+  stat(PAD + col * 2, rowY, Math.round(s.focusedPct) + '%', 'of stretches over 10 min', ACCENT);
+  stat(PAD + col * 3, rowY, s.switchesPerHour.toFixed(1), 'switches per active hour', INK);
 
   text('switches by hour of day', PAD, 440, 18, MUTED, $.NSFontWeightMedium);
-  hourChart(s.by_hour, PAD, 474, W - PAD * 2, 110);
+  hourChart(s.byHour, PAD, 474, W - PAD * 2, 110);
 
   const credit = 'github.com/M4XGO/attention-audit · @NonyMaxime';
-  const attrs = $.NSMutableDictionary.alloc.init;
-  attrs.setObjectForKey(font(15, $.NSFontWeightRegular), $.NSFontAttributeName);
-  const creditW = $(credit).sizeWithAttributes(attrs).width;
+  const creditW = $(credit).sizeWithAttributes(attrsFor(15, $.NSFontWeightRegular, MUTED)).width;
   text(credit, W - PAD - creditW, PAD - 4, 15, MUTED, $.NSFontWeightRegular);
 
   ctx.flushGraphics;
   const png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({}));
-  if (!png.writeToFileAtomically(argv[1], true)) throw new Error('could not write ' + argv[1]);
-  return 'ok';
+  if (!png.writeToFileAtomically(outPath, true)) throw new Error('could not write ' + outPath);
+}
+
+// ---------- entry ----------
+
+function run(argv) {
+  const [dataDir, outPath] = argv;
+  const samples = readSamples(dataDir);
+  if (samples.length < 2) throw new Error('not enough data yet. let the audit run a few hours.');
+  const stats = compute(samples);
+  if (!stats) throw new Error('every sample is idle. was the mac asleep the whole time?');
+  drawCard(stats, outPath);
+  // Last line is machine-read by card.sh to prefill the post.
+  return textReport(stats) + '\n' + JSON.stringify({
+    days: stats.days,
+    perDay: Math.round(stats.switchesPerDay),
+    median: fmt(stats.medianRun),
+  });
 }
