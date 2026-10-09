@@ -12,6 +12,7 @@ set -euo pipefail
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly DATA_DIR="${SCRIPT_DIR}/data"
 readonly CARD="${SCRIPT_DIR}/card.png"
+readonly ICON="${SCRIPT_DIR}/assets/nudge.icns"
 readonly REPO_URL="github.com/M4XGO/attention-audit"
 readonly X_HANDLE="@NonyMaxime"
 readonly WAITLIST_URL="https://mynudge.app/?utm_source=attention-audit&utm_medium=script&utm_campaign=card#waitlist"
@@ -19,7 +20,7 @@ readonly CTA="Want to know what your numbers mean + early access to Nudge?"
 readonly MODE="${1:-}"
 
 if [[ "$MODE" == "--ask" ]]; then
-    answer=$(osascript -e 'button returned of (display dialog "7 days logged. Your attention card is ready." with title "Attention audit" buttons {"Later", "Show my card"} default button "Show my card")' 2>/dev/null || echo "Later")
+    answer=$(osascript -e "button returned of (display dialog \"7 days logged. Your attention card is ready.\" with title \"Nudge · Attention audit\" buttons {\"Later\", \"Show my card\"} default button \"Show my card\" with icon POSIX file \"${ICON}\")" 2>/dev/null || echo "Later")
     if [[ "$answer" != "Show my card" ]]; then
         exit 1
     fi
@@ -29,7 +30,7 @@ if ! output=$(osascript -l JavaScript "${SCRIPT_DIR}/card.js" "$DATA_DIR" "$CARD
     message="${output##*Error: }"
     echo "$message" >&2
     if [[ ! -t 1 ]]; then
-        osascript -e "display alert \"Attention audit\" message \"${message//\"/}\"" >/dev/null 2>&1 || true
+        osascript -e "display alert \"Nudge · Attention audit\" message \"${message//\"/}\"" >/dev/null 2>&1 || true
     fi
     exit 1
 fi
@@ -63,7 +64,7 @@ open "https://x.com/intent/post?text=${encoded}"
 marker="${DATA_DIR}/.waitlist_asked"
 if [[ ! -f "$marker" ]]; then
     touch "$marker"
-    join=$(osascript -e "button returned of (display dialog \"${CTA}\" with title \"Attention audit\" buttons {\"No thanks\", \"Join the waitlist\"} default button \"Join the waitlist\")" 2>/dev/null || echo "No thanks")
+    join=$(osascript -e "button returned of (display dialog \"${CTA}\" with title \"Nudge · Attention audit\" buttons {\"No thanks\", \"Join the waitlist\"} default button \"Join the waitlist\" with icon POSIX file \"${ICON}\")" 2>/dev/null || echo "No thanks")
     if [[ "$join" == "Join the waitlist" ]]; then
         open "$WAITLIST_URL"
     fi

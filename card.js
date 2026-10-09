@@ -1,9 +1,10 @@
 // Turns the audit CSVs into your attention numbers and a shareable card,
 // using only what ships with macOS (JavaScript for Automation + AppKit).
-// Usage: osascript -l JavaScript card.js <data_dir> <out.png>
+// Usage: osascript -l JavaScript card.js <data_dir> <out.png> [assets_dir]
 // Prints the text report. The card never shows app names.
 
 ObjC.import('AppKit');
+ObjC.import('CoreText');
 
 const IDLE = 'idle';
 const FOCUSED_SECONDS = 600;
@@ -154,18 +155,44 @@ function textReport(s) {
 }
 
 // ---------- card ----------
+// Nudge art direction: cream page, ivory sheet, Newsreader for figures,
+// Public Sans for text, one teal accent. Nudge red only marks the peak hour,
+// the moment of the day the app would nudge you.
 // AppKit's origin is bottom-left, so every y below goes through top().
 
 const W = 1200;
 const H = 675;
-const PAD = 72;
+const MARGIN = 28;
+const PAD = 76;
 
-const INK = [0.945, 0.941, 0.929];
-const MUTED = [0.537, 0.549, 0.573];
-const ACCENT = [0.2, 0.706, 0.867];
-const NUDGE = [1, 0.22, 0.18];
-const BG = [0.082, 0.09, 0.102];
-const TRACK = [0.2, 0.212, 0.235];
+const PAGE = hex('#e7e2d7');
+const SHEET = hex('#f6f2ea');
+const BORDER = hex('#cfc7b8');
+const INK = hex('#1f1c18');
+const MUTED = hex('#524c45');
+const FAINT = hex('#8a8276');
+const ACCENT = hex('#326b82');
+const TRACK = hex('#e4ddcf');
+const NUDGE = hex('#ff382e');
+
+const SERIF = { regular: 'Newsreader16pt-Regular', medium: 'NewsreaderRoman-Medium' };
+const SANS = { regular: 'PublicSansRoman-Regular', medium: 'PublicSansRoman-Medium', semibold: 'PublicSansRoman-SemiBold' };
+
+function hex(h) {
+  return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+}
+
+function registerFonts(assetsDir) {
+  ['Newsreader.ttf', 'PublicSans.ttf'].forEach(name => {
+    $.CTFontManagerRegisterFontsForURL($.NSURL.fileURLWithPath(assetsDir + '/fonts/' + name), 1, null);
+  });
+}
+
+// Falls back to the system font if a brand font did not register.
+function font(name, size) {
+  const f = $.NSFont.fontWithNameSize(name, size);
+  return f.isNil() ? $.NSFont.systemFontOfSize(size) : f;
+}
 
 function color(rgb) {
   return $.NSColor.colorWithSRGBRedGreenBlueAlpha(rgb[0], rgb[1], rgb[2], 1);
@@ -175,15 +202,20 @@ function top(y, height) {
   return H - y - height;
 }
 
-function attrsFor(size, weight, rgb) {
+function attrsFor(name, size, rgb, tracking) {
   const attrs = $.NSMutableDictionary.alloc.init;
-  attrs.setObjectForKey($.NSFont.systemFontOfSizeWeight(size, weight), $.NSFontAttributeName);
+  attrs.setObjectForKey(font(name, size), $.NSFontAttributeName);
   attrs.setObjectForKey(color(rgb), $.NSForegroundColorAttributeName);
+  if (tracking) attrs.setObjectForKey($(tracking), $.NSKernAttributeName);
   return attrs;
 }
 
-function text(str, x, y, size, rgb, weight) {
-  const attrs = attrsFor(size, weight, rgb);
+function measure(str, name, size, tracking) {
+  return $(str).sizeWithAttributes(attrsFor(name, size, INK, tracking)).width;
+}
+
+function text(str, x, y, name, size, rgb, tracking) {
+  const attrs = attrsFor(name, size, rgb, tracking);
   const s = $(str);
   const sz = s.sizeWithAttributes(attrs);
   s.drawAtPointWithAttributes($.NSMakePoint(x, top(y, sz.height)), attrs);
@@ -192,59 +224,91 @@ function text(str, x, y, size, rgb, weight) {
 
 function rect(x, y, w, h, rgb, radius) {
   color(rgb).setFill;
-  $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius(
-    $.NSMakeRect(x, top(y, h), w, h), radius, radius).fill;
+  $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius($.NSMakeRect(x, top(y, h), w, h), radius, radius).fill;
+}
+
+function strokeRect(x, y, w, h, rgb, radius) {
+  color(rgb).setStroke;
+  const path = $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius(
+    $.NSMakeRect(x + 0.5, top(y, h) + 0.5, w - 1, h - 1), radius, radius);
+  path.setLineWidth(1);
+  path.stroke;
+}
+
+function image(path, x, y, size, radius) {
+  const img = $.NSImage.alloc.initWithContentsOfFile(path);
+  if (img.isNil()) return false;
+  $.NSGraphicsContext.saveGraphicsState;
+  $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius($.NSMakeRect(x, top(y, size), size, size), radius, radius).addClip;
+  img.drawInRectFromRectOperationFraction($.NSMakeRect(x, top(y, size), size, size), $.NSZeroRect, $.NSCompositingOperationSourceOver, 1);
+  $.NSGraphicsContext.restoreGraphicsState;
+  return true;
 }
 
 function stat(x, y, value, label, rgb) {
-  text(value, x, y, 46, rgb, $.NSFontWeightSemibold);
-  text(label, x, y + 60, 20, MUTED, $.NSFontWeightRegular);
+  text(value, x, y, SERIF.medium, 52, rgb, -0.5);
+  text(label, x, y + 68, SANS.regular, 19, MUTED);
 }
 
 function hourChart(byHour, x, y, w, h) {
   const peak = Math.max(1, ...byHour);
-  const gap = 6;
+  const gap = 7;
   const barW = (w - gap * 23) / 24;
   byHour.forEach((count, hour) => {
     const bx = x + hour * (barW + gap);
-    rect(bx, y, barW, h, TRACK, 3);
-    const bh = Math.max(count ? 4 : 0, (count / peak) * h);
-    if (bh) rect(bx, y + h - bh, barW, bh, count === peak ? NUDGE : ACCENT, 3);
+    rect(bx, y, barW, h, TRACK, 4);
+    const bh = Math.max(count ? 5 : 0, (count / peak) * h);
+    if (bh) rect(bx, y + h - bh, barW, bh, count === peak ? NUDGE : ACCENT, 4);
   });
   [0, 6, 12, 18, 23].forEach(hour => {
-    text(String(hour).padStart(2, '0') + 'h', x + hour * (barW + gap) - 2, y + h + 10, 15, MUTED, $.NSFontWeightRegular);
+    text(String(hour).padStart(2, '0') + 'h', x + hour * (barW + gap), y + h + 10, SANS.regular, 14, FAINT);
   });
 }
 
-function drawCard(s, outPath) {
+function drawCard(s, outPath, assetsDir) {
+  registerFonts(assetsDir);
   const rep = $.NSBitmapImageRep.alloc
     .initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(
       null, W, H, 8, 4, true, false, $.NSDeviceRGBColorSpace, 0, 0);
   const ctx = $.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep);
   $.NSGraphicsContext.setCurrentContext(ctx);
 
-  rect(0, 0, W, H, BG, 0);
+  rect(0, 0, W, H, PAGE, 0);
+  rect(MARGIN, MARGIN, W - MARGIN * 2, H - MARGIN * 2, SHEET, 26);
+  strokeRect(MARGIN, MARGIN, W - MARGIN * 2, H - MARGIN * 2, BORDER, 26);
 
   const dayLabel = s.days === 1 ? '1 day' : s.days + ' days';
-  text('attention audit · ' + dayLabel + ' on my mac', PAD, PAD - 8, 22, MUTED, $.NSFontWeightMedium);
+  text('ATTENTION AUDIT  ·  ' + dayLabel.toUpperCase() + ' ON MY MAC', PAD, 74, SANS.semibold, 14, FAINT, 1.8);
 
-  const numW = text(String(Math.round(s.switchesPerDay)), PAD, PAD + 28, 132, INK, $.NSFontWeightBold);
-  text('app switches', PAD + numW + 24, PAD + 70, 34, INK, $.NSFontWeightMedium);
-  text('a day', PAD + numW + 24, PAD + 112, 34, MUTED, $.NSFontWeightMedium);
+  const iconSize = 34;
+  const hasIcon = image(assetsDir + '/nudge-icon.png', W - PAD - iconSize, 64, iconSize, 8);
+  const brandX = W - PAD - (hasIcon ? iconSize + 10 : 0) - measure('nudge', SERIF.medium, 26);
+  text('nudge', brandX, 66, SERIF.medium, 26, INK);
+
+  const num = String(Math.round(s.switchesPerDay));
+  const numW = text(num, PAD - 6, 112, SERIF.regular, 150, INK, -4);
+  text('app switches', PAD + numW + 18, 158, SERIF.regular, 40, INK, -0.5);
+  text('a day, on average', PAD + numW + 18, 206, SANS.regular, 21, MUTED);
 
   const rowY = 300;
   const col = (W - PAD * 2) / 4;
   stat(PAD, rowY, fmt(s.medianRun), 'median focus stretch', INK);
-  stat(PAD + col, rowY, Math.round(s.shortPct) + '%', 'of stretches under 2 min', NUDGE);
+  stat(PAD + col, rowY, Math.round(s.shortPct) + '%', 'of stretches under 2 min', INK);
   stat(PAD + col * 2, rowY, Math.round(s.focusedPct) + '%', 'of stretches over 10 min', ACCENT);
   stat(PAD + col * 3, rowY, s.switchesPerHour.toFixed(1), 'switches per active hour', INK);
 
-  text('switches by hour of day', PAD, 440, 18, MUTED, $.NSFontWeightMedium);
-  hourChart(s.byHour, PAD, 474, W - PAD * 2, 110);
+  rect(PAD, 418, W - PAD * 2, 1, BORDER, 0);
+  text('switches by hour of day', PAD, 438, SANS.medium, 15, MUTED);
+  const peakHour = s.byHour.indexOf(Math.max(...s.byHour));
+  const peakLabel = 'peak at ' + String(peakHour).padStart(2, '0') + 'h';
+  const peakW = measure(peakLabel, SANS.medium, 15);
+  rect(W - PAD - peakW - 14, 440, 8, 8, NUDGE, 4);
+  text(peakLabel, W - PAD - peakW, 438, SANS.medium, 15, MUTED);
+  hourChart(s.byHour, PAD, 470, W - PAD * 2, 92);
 
-  const credit = 'github.com/M4XGO/attention-audit · @NonyMaxime';
-  const creditW = $(credit).sizeWithAttributes(attrsFor(15, $.NSFontWeightRegular, MUTED)).width;
-  text(credit, W - PAD - creditW, PAD - 4, 15, MUTED, $.NSFontWeightRegular);
+  text('github.com/M4XGO/attention-audit  ·  @NonyMaxime', PAD, 600, SANS.regular, 14, FAINT);
+  const site = 'mynudge.app';
+  text(site, W - PAD - measure(site, SANS.medium, 14), 600, SANS.medium, 14, ACCENT);
 
   ctx.flushGraphics;
   const png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({}));
@@ -255,11 +319,12 @@ function drawCard(s, outPath) {
 
 function run(argv) {
   const [dataDir, outPath] = argv;
+  const assetsDir = argv[2] || dataDir.replace(/\/data\/?$/, '') + '/assets';
   const samples = readSamples(dataDir);
   if (samples.length < 2) throw new Error('not enough data yet. let the audit run a few hours.');
   const stats = compute(samples);
   if (!stats) throw new Error('every sample is idle. was the mac asleep the whole time?');
-  drawCard(stats, outPath);
+  drawCard(stats, outPath, assetsDir);
   // Last line is machine-read by card.sh to prefill the post.
   return textReport(stats) + '\n' + JSON.stringify({
     days: stats.days,

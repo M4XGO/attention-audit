@@ -8,7 +8,7 @@ set -euo pipefail
 #              No sudo, no permission prompt, nothing leaves your Mac.
 # Usage: curl -fsSL https://raw.githubusercontent.com/M4XGO/attention-audit/main/install.sh | bash
 #        ~/.attention-audit/install.sh uninstall
-# Dependencies: curl, tar, launchctl, osacompile (all macOS built-ins)
+# Dependencies: curl, tar, launchctl, osacompile, codesign (all macOS built-ins)
 
 readonly INSTALL_DIR="${HOME}/.attention-audit"
 readonly LABEL="com.m4xgo.attention-audit"
@@ -38,6 +38,8 @@ fetch_files() {
     for f in "${FILES[@]}"; do
         cp "${tmp}/${f}" "${INSTALL_DIR}/${f}"
     done
+    mkdir -p "${INSTALL_DIR}/assets"
+    cp -R "${tmp}/assets/." "${INSTALL_DIR}/assets/"
     chmod +x "${INSTALL_DIR}"/*.sh
 }
 
@@ -70,6 +72,10 @@ install_app() {
     mkdir -p "$(dirname "$APP")"
     rm -rf "$APP"
     osacompile -o "$APP" -e "do shell script quoted form of \"${INSTALL_DIR}/card.sh\" & \" > /dev/null 2>&1 &\""
+    # Swapping the icon breaks osacompile's ad-hoc signature, so sign again.
+    cp "${INSTALL_DIR}/assets/nudge.icns" "${APP}/Contents/Resources/applet.icns"
+    codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+    touch "$APP"
 }
 
 if [[ "${1:-}" == "uninstall" ]]; then
