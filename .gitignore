@@ -1,0 +1,5 @@
+data/*.csv
+card.png
+__pycache__/
+*.pyc
+.DS_Store
