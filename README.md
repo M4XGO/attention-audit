@@ -41,6 +41,7 @@ Read the scripts before you run them, they are short on purpose.
 | `audit.sh` | every 30s, logs the frontmost app to a daily CSV. 5 min without input counts as idle |
 | `card.sh` | builds the card, opens it, opens a draft post |
 | `card.js` | computes the numbers and draws the card with macOS AppKit (JavaScript for Automation) |
+| `assets/` | Nudge icon and the two fonts used on the card |
 | `install.sh` | copies the files, starts `audit.sh` at login (LaunchAgent), creates Attention Card.app |
 
 Prefer running it by hand? Clone the repo, run `./audit.sh` in a terminal tab, and `./card.sh` whenever you want your numbers (`./card.sh --no-share` to only print them).
@@ -62,4 +63,4 @@ I'm building [Nudge](https://mynudge.app/?utm_source=attention-audit&utm_medium=
 
 ## License
 
-MIT
+MIT. Bundled fonts in `assets/fonts` ([Newsreader](https://github.com/productiontype/Newsreader), [Public Sans](https://github.com/uswds/public-sans)) are under the SIL Open Font License, see the OFL files next to them.
