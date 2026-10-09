@@ -91,7 +91,7 @@ function run(argv) {
   text('switches by hour of day', PAD, 440, 18, MUTED, $.NSFontWeightMedium);
   hourChart(s.by_hour, PAD, 474, W - PAD * 2, 110);
 
-  const credit = 'github.com/M4XGO/attention-audit';
+  const credit = 'github.com/M4XGO/attention-audit · @NonyMaxime';
   const attrs = $.NSMutableDictionary.alloc.init;
   attrs.setObjectForKey(font(15, $.NSFontWeightRegular), $.NSFontAttributeName);
   const creditW = $(credit).sizeWithAttributes(attrs).width;

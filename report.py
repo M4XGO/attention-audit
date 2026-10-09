@@ -9,6 +9,8 @@ Usage:
   python3 report.py 2026-10-01      one day
   python3 report.py path.csv ...    explicit files
   python3 report.py --card          also render card.png (no app names on it)
+                                    and open a prefilled post to share it
+  python3 report.py --card --no-share
 """
 
 import csv
@@ -18,10 +20,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from collections import Counter
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_URL = "github.com/M4XGO/attention-audit"
+X_HANDLE = "@NonyMaxime"
 IDLE = "idle"
 FOCUSED_SECONDS = 600
 SHORT_SECONDS = 120
@@ -209,10 +214,26 @@ def render_card(s, out_path):
     print(f"card saved to {out_path}")
 
 
+def share(s, card_path):
+    """Open a prefilled post and reveal the card so attaching it is one drag."""
+    text = (
+        f"my attention audit, {s['days']} days on my mac:\n\n"
+        f"{round(s['switches_per_day'])} app switches a day. "
+        f"median focus stretch: {fmt(s['median_run'])}.\n\n"
+        f"check yours: {REPO_URL} via {X_HANDLE}"
+    )
+    url = "https://x.com/intent/post?text=" + urllib.parse.quote(text)
+    print()
+    print("share it (attach card.png, it just opened in Finder):")
+    print(url)
+    subprocess.run(["open", "-R", card_path], check=False)
+    subprocess.run(["open", url], check=False)
+
+
 def main():
     args = sys.argv[1:]
     want_card = "--card" in args
-    args = [a for a in args if a != "--card"]
+    args = [a for a in args if not a.startswith("--")]
 
     if args:
         paths = [a if a.endswith(".csv") else os.path.join(HERE, "data", f"audit_{a}.csv") for a in args]
@@ -230,7 +251,10 @@ def main():
     stats = compute(samples)
     print_report(stats)
     if want_card:
-        render_card(stats, os.path.join(HERE, "card.png"))
+        card_path = os.path.join(HERE, "card.png")
+        render_card(stats, card_path)
+        if "--no-share" not in sys.argv:
+            share(stats, card_path)
 
 
 if __name__ == "__main__":

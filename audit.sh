@@ -15,6 +15,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly DATA_DIR="${SCRIPT_DIR}/data"
 readonly INTERVAL="${1:-30}"
 readonly IDLE_THRESHOLD=300
+readonly READY_AFTER_DAYS=7
 
 if [[ ! "$INTERVAL" =~ ^[0-9]+$ ]] || [[ "$INTERVAL" -lt 5 ]]; then
     echo "Usage: $0 [interval_seconds >= 5]" >&2
@@ -39,15 +40,30 @@ log_file_for_today() {
     echo "${DATA_DIR}/audit_$(date +%Y-%m-%d).csv"
 }
 
+# One notification, the first time 7 distinct days are logged.
+notify_when_week_done() {
+    local marker="${DATA_DIR}/.week_notified"
+    [[ -f "$marker" ]] && return 0
+    local days
+    days=$(find "$DATA_DIR" -name 'audit_*.csv' | wc -l | tr -d ' ')
+    if [[ "$days" -ge "$READY_AFTER_DAYS" ]]; then
+        osascript -e "display notification \"Run: python3 report.py --card\" with title \"Your 7-day attention card is ready\"" 2>/dev/null || true
+        echo "7 days logged. your card is ready: python3 report.py --card"
+        touch "$marker"
+    fi
+}
+
 mkdir -p "$DATA_DIR"
 echo "logging the frontmost app every ${INTERVAL}s to data/audit_YYYY-MM-DD.csv"
 echo "idle after ${IDLE_THRESHOLD}s without input. ctrl-c to stop."
 echo "run it for 7 days, then: python3 report.py --card"
+notify_when_week_done
 
 while true; do
     log_file="$(log_file_for_today)"
     if [[ ! -f "$log_file" ]]; then
         echo "timestamp,app" > "$log_file"
+        notify_when_week_done
     fi
 
     if [[ "$(idle_seconds)" -ge "$IDLE_THRESHOLD" ]]; then

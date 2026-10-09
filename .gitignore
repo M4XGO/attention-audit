@@ -3,3 +3,4 @@ card.png
 __pycache__/
 *.pyc
 .DS_Store
+data/.week_notified

@@ -37,6 +37,12 @@ python3 report.py           # numbers in the terminal
 python3 report.py --card    # + card.png, ready to share
 ```
 
+After 7 days of logging you get a macOS notification when your card is ready.
+
+`--card` also opens a prefilled post with your numbers and reveals `card.png` in Finder, so sharing is one drag. Nothing is posted until you hit send. Add `--no-share` to skip it.
+
+If you post your card, tag [@NonyMaxime](https://x.com/NonyMaxime): I repost the most interesting ones and I'm collecting them to see what "normal" looks like.
+
 ## What the numbers mean
 
 - **app switches a day**: how often the frontmost app changed while you were active.
